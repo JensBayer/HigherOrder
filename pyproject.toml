@@ -1,0 +1,10 @@
+[project]
+name = "HigherOrderPatches"
+version = "0.1.0"
+description = "Official code of the higher-order adversarial patches paper"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ultralytics>=8.3.250",
+    "adv-utils==0.0.1",
+]

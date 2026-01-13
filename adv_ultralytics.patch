@@ -1,0 +1,132 @@
+diff --git a/ultralytics/data/augment.py b/ultralytics/data/augment.py
+index 1ab14a64..8853e5a9 100644
+--- a/ultralytics/data/augment.py
++++ b/ultralytics/data/augment.py
+@@ -8,6 +8,7 @@ from typing import Tuple, Union
+ import cv2
+ import numpy as np
+ import torch
++import torchvision as tv
+ from PIL import Image
+ 
+ from ultralytics.data.utils import polygons2masks, polygons2masks_overlap
+@@ -2299,6 +2300,13 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
+         >>> transforms = v8_transforms(dataset, imgsz=640, hyp=hyp)
+         >>> augmented_data = transforms(dataset[0])
+     """
++    applier = ApplierTransformation(
++            hyp.patch_zmq,
++            hyp.patch_mode,
++            hyp.patch_probability,
++            hyp.patch_resize_range,
++            hyp.patch_target_class,
++    )
+     mosaic = Mosaic(dataset, imgsz=imgsz, p=hyp.mosaic)
+     affine = RandomPerspective(
+         degrees=hyp.degrees,
+@@ -2309,7 +2317,8 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
+         pre_transform=None if stretch else LetterBox(new_shape=(imgsz, imgsz)),
+     )
+ 
+-    pre_transform = Compose([mosaic, affine])
++    pre_transform = Compose([applier, mosaic, affine])
++
+     if hyp.copy_paste_mode == "flip":
+         pre_transform.insert(1, CopyPaste(p=hyp.copy_paste, mode=hyp.copy_paste_mode))
+     else:
+@@ -2742,3 +2751,42 @@ class ToTensor:
+         im = im.half() if self.half else im.float()  # uint8 to fp16/32
+         im /= 255.0  # 0-255 to 0.0-1.0
+         return im
++
++class ApplierTransformation(BaseTransform):
++    def __init__(self, zmq_str, patch_mode, probability, resize_range, target_class=None):
++        super().__init__()
++        from adv_utils.applier import ZMQPatchApplier
++        self.applier = ZMQPatchApplier(
++                zmq_str=zmq_str,
++                mode={
++                    'random_bbox': ZMQPatchApplier.MODE_RANDOM_BBOX,
++                    'random': ZMQPatchApplier.MODE_RANDOM,
++                    'center_bbox': ZMQPatchApplier.MODE_CENTER_BBOX,
++                    }[patch_mode],
++                resize_range=resize_range,
++                probability=probability,
++                )
++        self.target_class = target_class
++        if target_class is not None and not isinstance(target_class, list):
++            self.target_class = [target_class]
++
++
++    def __call__(self, labels):
++        with torch.no_grad():
++            img = labels['img']
++            if self.target_class is None:
++                img = self.applier(
++                        torch.from_numpy(img).permute(2,0,1)/255,
++                        tv.ops.box_convert(torch.from_numpy(labels['instances'].bboxes), 'cxcywh', 'xywh'),
++                        normalized_annotations=True
++                        )
++            else:
++                img = self.applier(
++                        torch.from_numpy(img).permute(2,0,1)/255, 
++                        tv.ops.box_convert(torch.from_numpy(labels['instances'].bboxes[[l in self.target_class for l in labels['cls']]]), 'cxcywh', 'xywh'),
++                        normalized_annotations=True
++                        )
++            img = (img * 255).permute(1,2,0).to(torch.uint8).numpy()
++            labels['img'] = img
++        return labels
++
+diff --git a/ultralytics/models/yolo/detect/train.py b/ultralytics/models/yolo/detect/train.py
+index eea16e73..638b4313 100644
+--- a/ultralytics/models/yolo/detect/train.py
++++ b/ultralytics/models/yolo/detect/train.py
+@@ -128,7 +128,7 @@ class DetectionTrainer(BaseTrainer):
+             cls=batch["cls"].squeeze(-1),
+             bboxes=batch["bboxes"],
+             paths=batch["im_file"],
+-            fname=self.save_dir / f"train_batch{ni}.jpg",
++            fname=self.save_dir / f"train_batch{ni}.png",
+             on_plot=self.on_plot,
+         )
+ 
+diff --git a/ultralytics/nn/modules/head.py b/ultralytics/nn/modules/head.py
+index b9d05024..732aedd0 100644
+--- a/ultralytics/nn/modules/head.py
++++ b/ultralytics/nn/modules/head.py
+@@ -3,6 +3,7 @@
+ 
+ import copy
+ import math
++import os
+ 
+ import torch
+ import torch.nn as nn
+@@ -124,11 +125,11 @@ class Detect(nn.Module):
+             dbox = self.decode_bboxes(
+                 self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
+             )
+-            return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1)
++            return dbox.transpose(1, 2), (cls if 'ADV' in os.environ else cls.sigmoid()).permute(0, 2, 1)
+         else:
+             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+ 
+-        return torch.cat((dbox, cls.sigmoid()), 1)
++        return torch.cat((dbox, cls if 'ADV' in os.environ else cls.sigmoid()), 1)
+ 
+     def bias_init(self):
+         """Initialize Detect() biases, WARNING: requires stride availability."""
+diff --git a/ultralytics/utils/torch_utils.py b/ultralytics/utils/torch_utils.py
+index f2dbfbc6..86af53d7 100644
+--- a/ultralytics/utils/torch_utils.py
++++ b/ultralytics/utils/torch_utils.py
+@@ -67,6 +67,9 @@ def smart_inference_mode():
+     """Applies torch.inference_mode() decorator if torch>=1.9.0 else torch.no_grad() decorator."""
+ 
+     def decorate(fn):
++        if 'ADV' in os.environ:
++            print("ADV smart inference decorate disabled")
++            return fn
+         """Applies appropriate torch decorator for inference mode based on torch version."""
+         if TORCH_1_9 and torch.is_inference_mode_enabled():
+             return fn  # already in inference_mode, act as a pass-through
