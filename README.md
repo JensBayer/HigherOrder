@@ -1,7 +1,7 @@
 # Higher-Order Adversarial Patches for Real-Time Object Detectors
 
 [![arXiv](https://img.shields.io/badge/arXiv-2601.04991-b31b1b.svg?logo=arXiv)](https://arxiv.org/abs/2601.04991)
-[![code](https://img.shields.io/badge/Github-Code-keygen.svg?logo=github)](https://github.com/HigherOrder/)
+[![code](https://img.shields.io/badge/Github-Code-keygen.svg?logo=github)](https://github.com/JensBayer/HigherOrder/)
 [![models](https://img.shields.io/badge/Hugging_Face-Models-blue.svg?logo=huggingface)](https://huggingface.co/jenso/HigherOrder)
 ![license](https://img.shields.io/github/license/JensBayer/HigherOrder)
 
